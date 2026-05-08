@@ -35,6 +35,14 @@ export default function ChatWindow({ currentChat, setCurrentChat }) {
   }, []);
 
   useEffect(() => {
+    const availableModels = Object.keys(modelStatus?.models || {});
+    if (!availableModels.length || availableModels.includes(model)) return;
+    setModel(modelStatus.default && availableModels.includes(modelStatus.default)
+      ? modelStatus.default
+      : availableModels[0]);
+  }, [modelStatus, model]);
+
+  useEffect(() => {
     if (!currentChat) {
       setMessages([]);
       return;
@@ -250,7 +258,7 @@ export default function ChatWindow({ currentChat, setCurrentChat }) {
 
     try {
       const chatId = await ensureChat();
-      const result = await uploadFileToChat(chatId, file, abortController.signal);
+      const result = await uploadFileToChat(chatId, file, abortController.signal, model);
 
       if (result.error || result.detail) {
         throw new Error(result.detail || result.error || "Upload failed");
@@ -385,6 +393,7 @@ export default function ChatWindow({ currentChat, setCurrentChat }) {
 
   const selectedModelStatus = modelStatus?.models?.[model];
   const modelAvailable = selectedModelStatus?.available;
+  const availableModelEntries = Object.entries(modelStatus?.models || {});
   const modelLabel = !modelStatus
     ? "Checking"
     : modelStatus.ollama === "offline"
@@ -415,11 +424,22 @@ export default function ChatWindow({ currentChat, setCurrentChat }) {
             value={model}
             onChange={(e) => setModel(e.target.value)}
             title="Ollama model"
+            disabled={modelStatus?.ollama === "offline"}
           >
-            <option value="phi3:mini">Phi-3 Mini</option>
-            <option value="llava:latest">Vision</option>
-            <option value="llama3:latest">LLaMA 3</option>
-            <option value="llama3.1:latest">LLaMA 3.1</option>
+            {availableModelEntries.length ? (
+              availableModelEntries.map(([modelKey, info]) => (
+                <option key={modelKey} value={modelKey}>
+                  {info.vision ? `${modelKey} (vision)` : modelKey}
+                </option>
+              ))
+            ) : (
+              <>
+                <option value="phi3:mini">Phi-3 Mini</option>
+                <option value="llava:latest">Vision</option>
+                <option value="llama3:latest">LLaMA 3</option>
+                <option value="llama3.1:latest">LLaMA 3.1</option>
+              </>
+            )}
           </select>
           <span className="model-status-text">{modelLabel}</span>
         </div>

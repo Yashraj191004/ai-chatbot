@@ -14,7 +14,7 @@ import pdfplumber
 import pytesseract
 import requests
 from dotenv import load_dotenv
-from fastapi import FastAPI, UploadFile, File, Depends, HTTPException
+from fastapi import FastAPI, UploadFile, File, Form, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse, StreamingResponse
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
@@ -56,12 +56,30 @@ OLLAMA_BASE_URL = os.getenv("OLLAMA_BASE_URL", "http://127.0.0.1:11434")
 OLLAMA_URL = os.getenv("OLLAMA_URL", f"{OLLAMA_BASE_URL}/api/generate")
 OLLAMA_TIMEOUT_SECONDS = int(os.getenv("OLLAMA_TIMEOUT_SECONDS", "300"))
 DEFAULT_OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "phi3:mini")
-VISION_OLLAMA_MODELS = {"llava:latest"}
-ALLOWED_OLLAMA_MODELS = {"phi3:mini", "llama3:latest", "llama3.1:latest", *VISION_OLLAMA_MODELS}
+VISION_MODEL_KEYWORDS = (
+    "llava",
+    "vision",
+    "bakllava",
+    "moondream",
+    "minicpm-v",
+    "qwen-vl",
+    "qwen2-vl",
+    "qwen2.5vl",
+    "qwen2.5-vl",
+)
+VISION_OLLAMA_MODELS = {"llava:latest", "llama3.2-vision:latest"}
+ALLOWED_OLLAMA_MODELS = {
+    "phi3:mini",
+    "llama3:latest",
+    "neural-chat:latest",
+    "mistral:latest",
+    *VISION_OLLAMA_MODELS
+}
 MODEL_ALIASES = {
     "llama3": "llama3:latest",
     "llama3.1": "llama3.1:latest",
     "llava": "llava:latest",
+    "llama3.2-vision": "llama3.2-vision:latest",
 }
 UPLOAD_DIR = Path(__file__).resolve().parent / "uploads"
 GENERATED_DIR = Path(__file__).resolve().parent / "generated"
@@ -1645,6 +1663,45 @@ def attachment_reply(label: str, chunk_count: int, content: str, source_kind: st
     return "\n\n".join(lines)
 
 
+def vision_attachment_reply(filename: str, vision_text: str, ocr_text: str):
+    readable = ocr_text.strip()
+    if not readable or "No readable OCR text" in readable:
+        ocr_summary = "OCR did not find readable text."
+    elif len(readable) < 12:
+        ocr_summary = f"OCR found very little readable text: `{readable}`."
+    else:
+        ocr_summary = f"OCR text found: {readable[:500]}"
+
+    lines = [
+        f"I added {filename} to this chat and inspected it with the selected vision model.",
+        ocr_summary,
+        f"Vision read: {vision_text.strip()}",
+    ]
+
+    lines.append("I saved the OCR text as chat context, and while a vision model is selected I can also inspect the image directly for follow-up questions.")
+    return "\n\n".join(lines)
+
+
+def analyze_uploaded_image_with_ollama(filename: str, file_bytes: bytes, model_name: str):
+    prompt = (
+        "Describe this uploaded image clearly and concisely. "
+        "If it contains text, transcribe the visible text. "
+        "If it appears to be a signature, logo, document, screenshot, or photo, say that directly."
+    )
+    response = requests.post(
+        OLLAMA_URL,
+        json={
+            "model": model_name,
+            "prompt": prompt,
+            "images": [base64.b64encode(file_bytes).decode("utf-8")],
+            "stream": False,
+        },
+        timeout=(10, OLLAMA_TIMEOUT_SECONDS),
+    )
+    response.raise_for_status()
+    return response.json().get("response", "").strip()
+
+
 @app.get("/health")
 def health():
     return {"status": "ok"}
@@ -1652,9 +1709,15 @@ def health():
 
 @app.get("/models")
 def models():
+    try:
+        installed_models = fetch_installed_ollama_models()
+        model_names = [model["name"] for model in installed_models]
+    except requests.RequestException:
+        model_names = sorted(ALLOWED_OLLAMA_MODELS)
+
     return {
         "default": DEFAULT_OLLAMA_MODEL,
-        "models": sorted(ALLOWED_OLLAMA_MODELS),
+        "models": model_names,
     }
 
 
@@ -1702,16 +1765,46 @@ def normalize_model_name(model_name: str | None):
     return MODEL_ALIASES.get(selected, selected)
 
 
-@app.get("/models/status")
-def model_status():
-    statuses = {
-        model_name: {"available": False, "status": "not_installed"}
-        for model_name in sorted(ALLOWED_OLLAMA_MODELS)
+def is_vision_model(model_name: str):
+    lowered = model_name.lower()
+    return model_name in VISION_OLLAMA_MODELS or any(
+        keyword in lowered for keyword in VISION_MODEL_KEYWORDS
+    )
+
+
+def fetch_installed_ollama_models(timeout=3):
+    response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=timeout)
+    response.raise_for_status()
+    models = []
+    for model in response.json().get("models", []):
+        name = model.get("name")
+        if not name:
+            continue
+        models.append({
+            "name": name,
+            "size": model.get("size"),
+            "modified_at": model.get("modified_at"),
+            "details": model.get("details") or {},
+        })
+    return sorted(models, key=lambda item: item["name"].lower())
+
+
+def model_status_entry(model):
+    name = model["name"]
+    return {
+        "available": True,
+        "status": "active",
+        "vision": is_vision_model(name),
+        "size": model.get("size"),
+        "modified_at": model.get("modified_at"),
+        "family": (model.get("details") or {}).get("family"),
     }
 
+
+@app.get("/models/status")
+def model_status():
     try:
-        response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=3)
-        response.raise_for_status()
+        installed_models = fetch_installed_ollama_models()
     except requests.RequestException:
         return {
             "ollama": "offline",
@@ -1722,15 +1815,21 @@ def model_status():
             },
         }
 
-    installed_names = {model.get("name", "") for model in response.json().get("models", [])}
-
-    for model_name in statuses:
-        if model_name in installed_names:
-            statuses[model_name] = {"available": True, "status": "active"}
+    statuses = {
+        model["name"]: model_status_entry(model)
+        for model in installed_models
+    }
+    if DEFAULT_OLLAMA_MODEL not in statuses and statuses:
+        default_model = next(
+            (name for name in statuses if name.startswith(DEFAULT_OLLAMA_MODEL.split(":")[0])),
+            next(iter(statuses)),
+        )
+    else:
+        default_model = DEFAULT_OLLAMA_MODEL
 
     return {
         "ollama": "online",
-        "default": DEFAULT_OLLAMA_MODEL,
+        "default": default_model,
         "models": statuses,
     }
 
@@ -2000,14 +2099,15 @@ def delete_chat(chat_id: str, user=Depends(get_current_user), db: Session = Depe
 
 
 @app.post("/upload/{chat_id}")
-async def upload(
+def upload(
     chat_id: str,
     file: UploadFile = File(...),
+    model: str | None = Form(None),
     user=Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     get_owned_chat(chat_id, user, db)
-    file_bytes = await file.read()
+    file_bytes = file.file.read()
     is_image = is_image_filename(file.filename)
     if is_image:
         save_image_attachment(db, chat_id, file.filename, file_bytes)
@@ -2022,6 +2122,31 @@ async def upload(
     chunks = split_text(content)
     save_document_text(db, chat_id, file.filename, content)
     assistant_content = attachment_reply(file.filename, len(chunks), content, source_kind="uploaded file")
+    selected_model = normalize_model_name(model)
+
+    if is_image and is_vision_model(selected_model):
+        try:
+            installed_model_names = {item["name"] for item in fetch_installed_ollama_models()}
+            if selected_model in installed_model_names:
+                vision_text = analyze_uploaded_image_with_ollama(file.filename, file_bytes, selected_model)
+                if vision_text:
+                    assistant_content = vision_attachment_reply(file.filename, vision_text, content)
+            else:
+                assistant_content += (
+                    f"\n\n`{selected_model}` is selected but is not installed in Ollama. "
+                    "Choose an installed vision model from the dropdown."
+                )
+        except requests.Timeout:
+            assistant_content += (
+                f"\n\nI tried to inspect it with `{selected_model}`, but the vision model took too long to respond. "
+                "The OCR text is still saved, so you can ask about the image text or try the vision model again."
+            )
+        except requests.RequestException:
+            assistant_content += (
+                f"\n\nI tried to inspect it with `{selected_model}`, but Ollama did not return a vision response. "
+                "Make sure Ollama is running, then try again."
+            )
+
     db.add_all([
         Message(
             id=str(uuid4()),
@@ -2163,8 +2288,13 @@ def stream(
 ):
     get_owned_chat(data.chat_id, user, db)
     selected_model = normalize_model_name(data.model)
-    if selected_model not in ALLOWED_OLLAMA_MODELS:
-        raise HTTPException(status_code=400, detail="Choose an available Ollama model from the dropdown")
+    try:
+        installed_model_names = {model["name"] for model in fetch_installed_ollama_models()}
+    except requests.RequestException as exc:
+        raise HTTPException(status_code=503, detail="Ollama is offline. Start Ollama, then try again.") from exc
+
+    if selected_model not in installed_model_names:
+        raise HTTPException(status_code=400, detail="Choose an installed Ollama model from the dropdown")
 
     def generate():
         full_response = ""
@@ -2173,7 +2303,7 @@ def stream(
             f"{msg.role}: {msg.content}" for msg in previous_messages[-8:]
         )
         context = build_context(db, data.chat_id, data.message)
-        image_payloads = get_latest_image_payloads(db, data.chat_id) if selected_model in VISION_OLLAMA_MODELS else []
+        image_payloads = get_latest_image_payloads(db, data.chat_id) if is_vision_model(selected_model) else []
 
         source_signals = describe_source_signals(context)
 

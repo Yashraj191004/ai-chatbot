@@ -34,11 +34,26 @@ export const getChats = async () => {
 };
 
 export const getModelStatus = async () => {
-  const res = await fetch(`${API}/models/status`, {
-    headers: authHeaders()
-  });
-  if (handleAuthError(res)) return null;
-  return res.json();
+  const controller = new AbortController();
+  const timeout = setTimeout(() => controller.abort(), 5000);
+
+  try {
+    const res = await fetch(`${API}/models/status`, {
+      headers: authHeaders(),
+      signal: controller.signal,
+    });
+    if (handleAuthError(res)) return null;
+    return res.json();
+  } catch (err) {
+    return {
+      ollama: "offline",
+      default: null,
+      models: {},
+      error: err.name === "AbortError" ? "Backend timed out" : "Backend offline",
+    };
+  } finally {
+    clearTimeout(timeout);
+  }
 };
 
 export const renameChat = async (chatId, title) => {
@@ -63,9 +78,10 @@ export const deleteChat = async (chatId) => {
   return res.json();
 };
 
-export const uploadFileToChat = async (chatId, file, signal) => {
+export const uploadFileToChat = async (chatId, file, signal, model) => {
   const formData = new FormData();
   formData.append("file", file);
+  if (model) formData.append("model", model);
 
   const res = await fetch(`${API}/upload/${chatId}`, {
     method: "POST",

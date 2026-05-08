@@ -1,0 +1,50 @@
+# Environment variables
+.env
+.env.local
+.env.*.local
+backend/.env
+
+# Database files
+*.db
+*.sqlite
+*.sqlite3
+
+# Python
+backend/__pycache__/
+backend/venv/
+backend/.venv/
+backend/*.egg-info/
+backend/dist/
+backend/build/
+backend/.pytest_cache/
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Frontend
+frontend/node_modules/
+frontend/dist/
+frontend/.env.local
+
+# Logs
+*.log
+*.err
+*.out
+server.err.log
+server.out.log
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+backend/uploads/
+backend/generated/
+app.db

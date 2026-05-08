@@ -809,3 +809,30 @@ button:disabled, input:disabled {
     max-width: 88%;
   }
 }
+
+/* Watermark */
+.watermark {
+  position: fixed;
+  bottom: 8px;
+  right: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
+  opacity: 0.5;
+  pointer-events: none;
+  z-index: 100;
+  margin: 0;
+  padding: 4px 8px;
+  border-radius: 4px;
+  background: rgba(0, 0, 0, 0.2);
+  font-weight: 500;
+  transition: opacity 0.3s ease;
+}
+
+.watermark:hover {
+  opacity: 0.8;
+}
+
+.watermark-name {
+  font-weight: 700;
+  color: var(--text-soft);
+}

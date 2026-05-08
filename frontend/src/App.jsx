@@ -7,6 +7,7 @@ import Login from "./pages/Login";
 import Signup from "./pages/Signup";
 import Upload from "./pages/Upload";
 import ProtectedRoute from "./ProtectedRoute";
+import Watermark from "./components/Watermark";
 
 
 // 🔒 Protected App (your current UI)
@@ -44,30 +45,33 @@ function ChatApp() {
 // 🚀 MAIN APP WITH ROUTES
 export default function App() {
   return (
-    <Routes>
+    <>
+      <Routes>
 
-        {/* Default → Chat */}
-        <Route 
-          path="/" 
-          element={
-            <ProtectedRoute>
-              <ChatApp />
-            </ProtectedRoute>
-          } 
-        />
+          {/* Default → Chat */}
+          <Route 
+            path="/" 
+            element={
+              <ProtectedRoute>
+                <ChatApp />
+              </ProtectedRoute>
+            } 
+          />
 
-        {/* Auth Routes */}
-        <Route path="/login" element={<Login />} />
-        <Route path="/signup" element={<Signup />} />
-        <Route
-          path="/upload"
-          element={
-            <ProtectedRoute>
-              <Upload />
-            </ProtectedRoute>
-          }
-        />
+          {/* Auth Routes */}
+          <Route path="/login" element={<Login />} />
+          <Route path="/signup" element={<Signup />} />
+          <Route
+            path="/upload"
+            element={
+              <ProtectedRoute>
+                <Upload />
+              </ProtectedRoute>
+            }
+          />
 
-    </Routes>
+      </Routes>
+      <Watermark />
+    </>
   );
 }

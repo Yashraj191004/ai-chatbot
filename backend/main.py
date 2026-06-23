@@ -68,6 +68,12 @@ VISION_MODEL_KEYWORDS = (
     "qwen2.5-vl",
 )
 VISION_OLLAMA_MODELS = {"llava:latest", "llama3.2-vision:latest"}
+TEXT_MODEL_PREFERENCE = (
+    DEFAULT_OLLAMA_MODEL,
+    "mistral:latest",
+    "llama3:latest",
+    "neural-chat:latest",
+)
 ALLOWED_OLLAMA_MODELS = {
     "phi3:mini",
     "llama3:latest",
@@ -1332,7 +1338,9 @@ def wants_live_browser_open(lowered: str):
 
 def wants_open_browser_read(lowered: str):
     read_terms = ["read", "see what it says", "what does it say", "what it says", "scan", "summarize", "look at"]
-    browser_terms = ["chrome", "browser", "webpage", "website", "open page", "current page", "assignment"]
+    # An assignment may come from an uploaded file, so the word "assignment"
+    # alone must not route an ordinary document question to the live browser.
+    browser_terms = ["chrome", "browser", "webpage", "website", "open page", "current page"]
     return any(term in lowered for term in read_terms) and any(term in lowered for term in browser_terms)
 
 
@@ -1367,9 +1375,7 @@ def run_desktop_action(db: Session, chat_id: str, message: str):
                 target_url = f"https://{target_url}"
             return True, start_visible_browser_session(chat_id, target_url, label)
 
-    if ACTIVE_BROWSER_SESSIONS.get(browser_session_key(chat_id)) and any(
-        term in lowered for term in ["read", "see what it says", "what does it say", "what it says", "scan", "summarize", "look at"]
-    ):
+    if ACTIVE_BROWSER_SESSIONS.get(browser_session_key(chat_id)) and wants_open_browser_read(lowered):
         return read_visible_browser_session(db, chat_id)
 
     if wants_camera_capture(lowered, chat_id):
@@ -1772,6 +1778,37 @@ def is_vision_model(model_name: str):
     )
 
 
+def choose_text_model(installed_model_names, selected_model):
+    if not is_vision_model(selected_model):
+        return selected_model
+
+    for preferred_model in TEXT_MODEL_PREFERENCE:
+        if preferred_model in installed_model_names and not is_vision_model(preferred_model):
+            return preferred_model
+
+    return next(
+        (model_name for model_name in sorted(installed_model_names) if not is_vision_model(model_name)),
+        selected_model,
+    )
+
+
+def ollama_error_detail(response):
+    if response is None:
+        return ""
+
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+
+    if isinstance(payload, dict):
+        detail = payload.get("error") or payload.get("detail")
+        if detail:
+            return str(detail).strip()
+
+    return (response.text or "").strip()
+
+
 def fetch_installed_ollama_models(timeout=3):
     response = requests.get(f"{OLLAMA_BASE_URL}/api/tags", timeout=timeout)
     response.raise_for_status()
@@ -2141,6 +2178,13 @@ def upload(
                 f"\n\nI tried to inspect it with `{selected_model}`, but the vision model took too long to respond. "
                 "The OCR text is still saved, so you can ask about the image text or try the vision model again."
             )
+        except requests.HTTPError as exc:
+            detail = ollama_error_detail(exc.response)
+            assistant_content += f"\n\nI tried to inspect it with `{selected_model}`, but Ollama returned an error."
+            if detail:
+                assistant_content += f" {detail}"
+            else:
+                assistant_content += " The OCR text is still saved, so you can choose another active model and try again."
         except requests.RequestException:
             assistant_content += (
                 f"\n\nI tried to inspect it with `{selected_model}`, but Ollama did not return a vision response. "
@@ -2304,6 +2348,7 @@ def stream(
         )
         context = build_context(db, data.chat_id, data.message)
         image_payloads = get_latest_image_payloads(db, data.chat_id) if is_vision_model(selected_model) else []
+        response_model = selected_model if image_payloads else choose_text_model(installed_model_names, selected_model)
 
         source_signals = describe_source_signals(context)
 
@@ -2333,7 +2378,7 @@ User question:
 
         try:
             ollama_payload = {
-                "model": selected_model,
+                "model": response_model,
                 "prompt": prompt,
                 "stream": True,
             }
@@ -2359,26 +2404,28 @@ User question:
             status_code = exc.response.status_code if exc.response is not None else None
             if status_code == 404:
                 full_response = (
-                    f"The selected model `{selected_model}` is not installed in Ollama. "
-                    f"Run `ollama pull {selected_model}` or choose a model marked Active."
+                    f"The selected model `{response_model}` is not installed in Ollama. "
+                    f"Run `ollama pull {response_model}` or choose a model marked Active."
                 )
             else:
-                full_response = (
-                    f"Ollama returned an error for `{selected_model}`. "
-                    "Try another active model or restart Ollama."
-                )
+                detail = ollama_error_detail(exc.response)
+                full_response = f"Ollama returned an error for `{response_model}`."
+                if detail:
+                    full_response = f"{full_response} {detail}"
+                else:
+                    full_response = f"{full_response} Try another active model or restart Ollama."
             yield full_response
         except requests.ConnectionError:
             full_response = "Ollama is offline. Start Ollama, then try again."
             yield full_response
         except requests.Timeout:
             full_response = (
-                f"`{selected_model}` took too long to answer. "
+                f"`{response_model}` took too long to answer. "
                 "Try Phi-3 Mini for faster local responses, or ask a shorter question."
             )
             yield full_response
         except requests.RequestException:
-            full_response = f"I could not reach `{selected_model}` through Ollama. Choose an Active model and try again."
+            full_response = f"I could not reach `{response_model}` through Ollama. Choose an Active model and try again."
             yield full_response
 
         db.add_all([

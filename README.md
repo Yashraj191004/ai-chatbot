@@ -28,6 +28,32 @@ A full-stack AI-powered chatbot application built with FastAPI and React, featur
 - **HTTP Client**: Axios
 - **State Management**: React Context API
 
+## How the System Works
+
+```text
+User
+  |
+  v
+React frontend (chat, uploads, login)
+  |
+  | HTTP requests with JWT authentication
+  v
+FastAPI backend
+  |-- saves users, chats, messages, and document chunks in SQLite
+  |-- extracts text from uploaded files or imported web pages
+  |-- retrieves the most relevant saved chunks for each question
+  |-- routes explicit browser/desktop commands to the action handler
+  |
+  v
+Local Ollama model
+  |
+  | streams the generated answer
+  v
+React frontend displays the response
+```
+
+For document questions, the backend uses a retrieval-augmented generation (RAG) flow: it splits extracted text into chunks, finds the chunks most relevant to the user's question, and sends that context to Ollama. Normal questions stay in the chat flow, while explicit commands such as `read the open page` use the browser-action flow.
+
 ## 📋 Prerequisites
 
 - **Node.js** 16+ (for frontend)

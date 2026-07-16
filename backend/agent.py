@@ -2,8 +2,7 @@
 
 The model gets a toolbox (web search, scraping, browser control, PDF reading,
 document memory, desktop control, file creation) and decides itself which
-tools to call, in a loop, until it can answer — the same pattern coding
-agents like Claude Code use.
+tools to call, in a loop, until it can answer.
 
 Models with native tool support (qwen3, qwen2.5, llama3.1/3.2, mistral...)
 use Ollama's /api/chat tools API. For models without it, a JSON-protocol

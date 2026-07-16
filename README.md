@@ -30,29 +30,35 @@ A full-stack AI-powered chatbot application built with FastAPI and React, featur
 
 ## How the System Works
 
+The assistant is **agentic**: every message goes to a single `/agent` endpoint, where the local Ollama model is given a toolbox and decides itself — in a multi-step loop — which tools to use. There are no keyword commands; asking naturally ("what's on this page?", "find the deadline in my PDF", "open word and write the essay there") is enough.
+
 ```text
-User
+User message
   |
   v
-React frontend (chat, uploads, login)
-  |
-  | HTTP requests with JWT authentication
-  v
-FastAPI backend
-  |-- saves users, chats, messages, and document chunks in SQLite
-  |-- extracts text from uploaded files or imported web pages
-  |-- retrieves the most relevant saved chunks for each question
-  |-- routes explicit browser/desktop commands to the action handler
+React frontend --- streams NDJSON events (tool status + answer tokens)
   |
   v
-Local Ollama model
+FastAPI /agent endpoint
   |
-  | streams the generated answer
   v
-React frontend displays the response
+Agent loop (agent.py) <----> Ollama /api/chat with tool schemas
+  |          model returns tool calls until it can answer
+  v
+Tools (tools.py)
+  - web_search            real DuckDuckGo results
+  - fetch_webpage         headless Selenium read + save to chat memory
+  - read_pdf              download + extract a PDF by URL
+  - search_documents      semantic search over uploads/scrapes (FAISS)
+  - list_documents
+  - open_browser / browser_navigate / read_browser_page / close_browser
+                          visible Chrome the user can log into
+  - read_quiz_questions / select_quiz_answers (never submits)
+  - open_app / type_text / send_keys   Windows desktop control
+  - create_file           docx / xlsx / pptx / txt with model-written content
 ```
 
-For document questions, the backend uses a retrieval-augmented generation (RAG) flow: it splits extracted text into chunks, finds the chunks most relevant to the user's question, and sends that context to Ollama. Normal questions stay in the chat flow, while explicit commands such as `read the open page` use the browser-action flow.
+Models with native tool support (qwen3, qwen2.5, llama3.1/3.2, mistral, ...) use Ollama's tools API; other models fall back to a JSON tool protocol automatically. Uploaded files and scraped pages are chunked into a per-chat vector memory the agent searches on demand. Recommended models: `qwen3:8b` (default) and `qwen2.5vl:7b` for vision.
 
 ## 📋 Prerequisites
 

@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import { createChat, getModelStatus, runAssistantAction, scrapeAssignmentPage, uploadFileToChat } from "../api";
+import { API, createChat, getModelStatus, scrapeAssignmentPage, uploadFileToChat } from "../api";
 import InputBar from "./InputBar";
 import Message from "./Message";
 
@@ -8,7 +8,7 @@ export default function ChatWindow({ currentChat, setCurrentChat }) {
   const [messages, setMessages] = useState([]);
   const [loading, setLoading] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [model, setModel] = useState("phi3:mini");
+  const [model, setModel] = useState("qwen3:8b");
   const [modelStatus, setModelStatus] = useState(null);
   const bottomRef = useRef(null);
   const skipHistoryForChatRef = useRef(null);
@@ -148,25 +148,8 @@ export default function ChatWindow({ currentChat, setCurrentChat }) {
 
     try {
       const chatId = await ensureChat();
-      const actionResult = await runAssistantAction(chatId, input, abortController.signal);
-      if (actionResult.error || actionResult.detail) {
-        throw new Error(actionResult.detail || actionResult.error || "Could not run action");
-      }
-      if (actionResult.handled) {
-        setMessages((prev) => {
-          const updated = [...prev];
-          updated[updated.length - 1] = {
-            role: "ai",
-            text: actionResult.assistant_message || "Done.",
-          };
-          return updated;
-        });
-        window.dispatchEvent(new Event("chats-updated"));
-        return;
-      }
-
       const token = localStorage.getItem("token");
-      const res = await fetch("http://127.0.0.1:8000/stream", {
+      const res = await fetch(`${API}/agent`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -188,21 +171,64 @@ export default function ChatWindow({ currentChat, setCurrentChat }) {
         throw new Error(data.detail || "Could not start AI response");
       }
 
+      // The agent streams NDJSON events: status (tool activity), token
+      // (answer text), error, done. Show tool activity live, then the answer.
       const reader = res.body.getReader();
       const decoder = new TextDecoder();
-      let fullText = "";
+      let buffer = "";
+      let answer = "";
+      let statusLog = [];
+
+      const render = () => {
+        const activity = statusLog.map((s) => `🔧 ${s}`).join("\n");
+        const text = answer.trim()
+          ? answer
+          : activity
+            ? `${activity}\n\n_working..._`
+            : "typing";
+        setMessages((prev) => {
+          const updated = [...prev];
+          updated[updated.length - 1] = { role: "ai", text };
+          return updated;
+        });
+      };
 
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
+        buffer += decoder.decode(value, { stream: true });
 
-        fullText += decoder.decode(value, { stream: true });
-        setMessages((prev) => {
-          const updated = [...prev];
-          updated[updated.length - 1] = { role: "ai", text: fullText };
-          return updated;
-        });
+        const lines = buffer.split("\n");
+        buffer = lines.pop();
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          let event;
+          try {
+            event = JSON.parse(line);
+          } catch {
+            continue;
+          }
+          if (event.type === "status") {
+            statusLog.push(event.text);
+            answer = "";
+          } else if (event.type === "token") {
+            answer += event.text;
+          } else if (event.type === "error") {
+            answer = answer || event.text;
+          }
+          render();
+        }
       }
+
+      setMessages((prev) => {
+        const updated = [...prev];
+        updated[updated.length - 1] = {
+          role: "ai",
+          text: answer.trim() || "Done.",
+        };
+        return updated;
+      });
+      window.dispatchEvent(new Event("chats-updated"));
     } catch (err) {
       console.error("Stream error:", err);
       if (err.name === "AbortError") {
@@ -434,10 +460,8 @@ export default function ChatWindow({ currentChat, setCurrentChat }) {
               ))
             ) : (
               <>
-                <option value="phi3:mini">Phi-3 Mini</option>
-                <option value="llava:latest">Vision</option>
-                <option value="llama3:latest">LLaMA 3</option>
-                <option value="llama3.1:latest">LLaMA 3.1</option>
+                <option value="qwen3:8b">Qwen 3 8B</option>
+                <option value="qwen2.5vl:7b">Qwen 2.5 VL (vision)</option>
               </>
             )}
           </select>

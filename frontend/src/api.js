@@ -114,20 +114,6 @@ export const scrapeAssignmentPage = async (chatId, url, signal, options = {}) =>
   return res.json();
 };
 
-export const runAssistantAction = async (chatId, message, signal) => {
-  const res = await fetch(`${API}/action`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      ...authHeaders(),
-    },
-    body: JSON.stringify({ chat_id: chatId, message }),
-    signal,
-  });
-  if (handleAuthError(res)) return { error: "unauthorized" };
-  return res.json();
-};
-
 export const pinChat = async (chatId) => {
   return { msg: "pin not supported by backend" };
 };

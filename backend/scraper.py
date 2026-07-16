@@ -1,5 +1,4 @@
 from dataclasses import dataclass
-from datetime import datetime
 from time import sleep
 from urllib.parse import urljoin
 
@@ -8,17 +7,7 @@ from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 from selenium.webdriver.common.by import By
 from selenium.common.exceptions import TimeoutException
-from selenium.webdriver.support import expected_conditions as EC
-from selenium.webdriver.support.ui import WebDriverWait
 from webdriver_manager.chrome import ChromeDriverManager
-
-
-@dataclass
-class Assignment:
-    title: str
-    due_date: str | None = None
-    source_url: str | None = None
-    scraped_at: str = datetime.utcnow().isoformat()
 
 
 @dataclass
@@ -28,18 +17,6 @@ class ScrapedPage:
     text: str
     pdf_links: list[str]
     links: list[dict]
-
-
-@dataclass
-class McqOption:
-    label: str
-    element_id: str
-
-
-@dataclass
-class McqQuestion:
-    question: str
-    options: list[McqOption]
 
 
 def create_driver(headless=True):
@@ -55,6 +32,63 @@ def create_driver(headless=True):
     driver.set_page_load_timeout(30)
     driver.set_script_timeout(30)
     return driver
+
+
+def fetch_page(url, headless=True, wait_seconds=2, manual_login=False, login_wait_seconds=90):
+    """Load a page and return whatever it actually shows: title, text, links.
+
+    No content guessing — callers (the agent or the user) decide what the
+    page means. With manual_login=True a visible Chrome opens and waits so
+    the user can sign in before the page is read.
+    """
+    driver = create_driver(headless=False if manual_login else headless)
+    try:
+        try:
+            driver.get(url)
+        except TimeoutException as exc:
+            raise RuntimeError("The page took too long to load.") from exc
+
+        if manual_login:
+            sleep(max(10, min(login_wait_seconds, 300)))
+        if wait_seconds:
+            sleep(wait_seconds)
+
+        title = driver.title or url
+        text = driver.find_element(By.TAG_NAME, "body").text.strip()
+
+        pdf_links = []
+        links = []
+        for link in driver.find_elements(By.CSS_SELECTOR, "a[href]"):
+            href = link.get_attribute("href")
+            if not href:
+                continue
+
+            absolute_url = urljoin(url, href)
+            label = link.text.strip() or link.get_attribute("aria-label") or absolute_url
+            lower_href = absolute_url.lower()
+            if ".pdf" in lower_href:
+                link_type = "pdf"
+                pdf_links.append(absolute_url)
+            elif any(ext in lower_href for ext in [".docx", ".xlsx", ".pptx", ".csv", ".zip"]):
+                link_type = "file"
+            else:
+                link_type = "web"
+
+            links.append({
+                "label": label[:160],
+                "url": absolute_url,
+                "type": link_type,
+            })
+
+        return ScrapedPage(
+            url=url,
+            title=title,
+            text=text,
+            pdf_links=sorted(set(pdf_links)),
+            links=_dedupe_links(links),
+        )
+    finally:
+        driver.quit()
 
 
 def extract_mcq_questions(driver):
@@ -92,6 +126,18 @@ def extract_mcq_questions(driver):
     return questions
 
 
+@dataclass
+class McqOption:
+    label: str
+    element_id: str
+
+
+@dataclass
+class McqQuestion:
+    question: str
+    options: list[McqOption]
+
+
 def _input_label_text(driver, input_el):
     element_id = input_el.get_attribute("id")
     if element_id:
@@ -114,8 +160,7 @@ def _input_label_text(driver, input_el):
         return aria.strip()
 
     try:
-        parent_text = input_el.find_element(By.XPATH, "./ancestor::*[self::li or self::div or self::span][1]").text.strip()
-        return parent_text
+        return input_el.find_element(By.XPATH, "./ancestor::*[self::li or self::div or self::span][1]").text.strip()
     except Exception:
         return ""
 
@@ -141,134 +186,6 @@ def _question_text(input_el, option_label):
     if option_label and text.endswith(option_label):
         text = text[: -len(option_label)].strip()
     return text
-
-
-def scrape_assignment_cards(
-    url,
-    card_selector,
-    title_selector,
-    due_selector=None,
-    wait_selector=None,
-    headless=True,
-):
-    """
-    Generic Selenium scraper for LMS assignment pages.
-
-    Pass CSS selectors for the assignment card, title, and optional due date.
-    For sites requiring login, open with headless=False and log in manually,
-    or adapt this helper with your school's specific login steps.
-    """
-    driver = create_driver(headless=headless)
-    try:
-        driver.get(url)
-        wait = WebDriverWait(driver, 20)
-        wait.until(EC.presence_of_element_located((By.CSS_SELECTOR, wait_selector or card_selector)))
-
-        assignments = []
-        for card in driver.find_elements(By.CSS_SELECTOR, card_selector):
-            title = _safe_text(card, title_selector)
-            if not title:
-                continue
-            assignments.append(
-                Assignment(
-                    title=title,
-                    due_date=_safe_text(card, due_selector) if due_selector else None,
-                    source_url=url,
-                )
-            )
-        return assignments
-    finally:
-        driver.quit()
-
-
-def scrape_assignment_page(url, headless=True, wait_seconds=2, manual_login=False, login_wait_seconds=90):
-    """
-    Scrape visible assignment page text and discover PDF links.
-
-    For LMS pages that require login/MFA, use headless=False. Selenium will open
-    Chrome, you can log in manually, and the scraper will read the page after
-    wait_seconds.
-    """
-    driver = create_driver(headless=False if manual_login else headless)
-    try:
-        try:
-            driver.get(url)
-        except TimeoutException as exc:
-            raise RuntimeError("The assignment page took too long to load.") from exc
-
-        if manual_login:
-            sleep(max(10, min(login_wait_seconds, 300)))
-
-        if wait_seconds:
-            sleep(wait_seconds)
-
-        title = driver.title or "Assignment page"
-        text = driver.find_element(By.TAG_NAME, "body").text.strip()
-        lower_text = text.lower()
-        lower_title = title.lower()
-
-        login_signals = [
-            "log in",
-            "login",
-            "sign in",
-            "canvas login",
-            "instructure",
-            "username",
-            "password",
-            "single sign-on",
-            "duo",
-        ]
-        if not manual_login and any(signal in lower_text for signal in login_signals) and (
-            "assignment" not in lower_text or "login" in lower_title or "sign in" in lower_title
-        ):
-            raise RuntimeError(
-                "This page appears to require login. Try again using login-required mode so a visible browser can open for you to sign in."
-            )
-
-        if len(text.split()) < 20:
-            raise RuntimeError("I could not find enough readable assignment text on that page.")
-
-        pdf_links = []
-        links = []
-
-        for link in driver.find_elements(By.CSS_SELECTOR, "a[href]"):
-            href = link.get_attribute("href")
-            if not href:
-                continue
-
-            absolute_url = urljoin(url, href)
-            label = link.text.strip() or link.get_attribute("aria-label") or absolute_url
-            lower_href = absolute_url.lower()
-            if ".pdf" in lower_href:
-                link_type = "pdf"
-                pdf_links.append(absolute_url)
-            elif any(ext in lower_href for ext in [".docx", ".xlsx", ".pptx", ".csv", ".zip"]):
-                link_type = "file"
-            else:
-                link_type = "web"
-
-            links.append({
-                "label": label[:160],
-                "url": absolute_url,
-                "type": link_type,
-            })
-
-        return ScrapedPage(
-            url=url,
-            title=title,
-            text=text,
-            pdf_links=sorted(set(pdf_links)),
-            links=_dedupe_links(links),
-        )
-    finally:
-        driver.quit()
-
-
-def _safe_text(root, selector):
-    try:
-        return root.find_element(By.CSS_SELECTOR, selector).text.strip()
-    except Exception:
-        return None
 
 
 def _dedupe_links(links):

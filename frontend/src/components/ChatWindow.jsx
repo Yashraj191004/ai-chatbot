@@ -123,17 +123,6 @@ export default function ChatWindow({ currentChat, setCurrentChat }) {
     return chat.id;
   };
 
-  const replaceLastAiMessage = (text) => {
-    setMessages((prev) => {
-      const updated = [...prev];
-      const lastIndex = updated.length - 1;
-      if (lastIndex >= 0 && updated[lastIndex]?.role === "ai") {
-        updated[lastIndex] = { role: "ai", text };
-      }
-      return updated;
-    });
-  };
-
   const send = async (input) => {
     if (!input?.trim() || busy) return;
 
@@ -184,7 +173,7 @@ export default function ChatWindow({ currentChat, setCurrentChat }) {
         const text = answer.trim()
           ? answer
           : activity
-            ? `${activity}\n\n_working..._`
+            ? `${activity}\n\nworking...`
             : "typing";
         setMessages((prev) => {
           const updated = [...prev];
@@ -270,17 +259,6 @@ export default function ChatWindow({ currentChat, setCurrentChat }) {
     setBusy(true);
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
-    const progressMessages = [
-      "Reading the file...",
-      "Extracting text and tables...",
-      "Creating searchable memory...",
-      "Checking what useful details were found...",
-    ];
-    let progressIndex = 0;
-    const progressTimer = setInterval(() => {
-      progressIndex = (progressIndex + 1) % progressMessages.length;
-      replaceLastAiMessage(progressMessages[progressIndex]);
-    }, 2200);
 
     try {
       const chatId = await ensureChat();
@@ -317,7 +295,6 @@ export default function ChatWindow({ currentChat, setCurrentChat }) {
         return updated;
       });
     } finally {
-      clearInterval(progressTimer);
       abortControllerRef.current = null;
       setBusy(false);
     }
@@ -339,24 +316,6 @@ export default function ChatWindow({ currentChat, setCurrentChat }) {
     setBusy(true);
     const abortController = new AbortController();
     abortControllerRef.current = abortController;
-    const progressMessages = options.manualLogin
-      ? [
-          "Waiting for the browser login to finish...",
-          "Reading the page now...",
-          "Finding linked PDFs, files, and references...",
-          "Saving the useful page context...",
-        ]
-      : [
-          "Opening the page...",
-          "Reading visible text...",
-          "Finding linked PDFs, files, and references...",
-          "Saving the useful page context...",
-        ];
-    let progressIndex = 0;
-    const progressTimer = setInterval(() => {
-      progressIndex = (progressIndex + 1) % progressMessages.length;
-      replaceLastAiMessage(progressMessages[progressIndex]);
-    }, 2500);
 
     try {
       const chatId = await ensureChat();
@@ -393,7 +352,6 @@ export default function ChatWindow({ currentChat, setCurrentChat }) {
         return updated;
       });
     } finally {
-      clearInterval(progressTimer);
       abortControllerRef.current = null;
       setBusy(false);
     }

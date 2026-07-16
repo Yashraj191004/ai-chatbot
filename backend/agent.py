@@ -26,27 +26,45 @@ DEFAULT_OLLAMA_MODEL = os.getenv("OLLAMA_MODEL", "qwen3:8b")
 
 MAX_TOOL_ROUNDS = 8
 
-VISION_MODEL_KEYWORDS = (
-    "llava", "vision", "bakllava", "moondream", "minicpm-v",
-    "qwen-vl", "qwen2-vl", "qwen2.5vl", "qwen2.5-vl", "qwen3-vl",
-)
+# Fallbacks only for old Ollama versions whose /api/show has no capabilities field.
+_VISION_KEYWORD_FALLBACK = ("llava", "vision", "moondream", "minicpm-v", "vl")
+_TOOLS_KEYWORD_FALLBACK = ("qwen", "llama3.1", "llama3.2", "llama3.3", "mistral", "mixtral", "command-r", "granite")
 
-# Families known to support Ollama's native tools API.
-TOOL_CAPABLE_KEYWORDS = (
-    "qwen3", "qwen2.5", "qwen2", "llama3.1", "llama3.2", "llama3.3",
-    "mistral", "mixtral", "command-r", "hermes3", "firefunction",
-    "granite", "smollm2", "nemotron", "gpt-oss", "devstral",
-)
+_capability_cache = {}
+
+
+def get_model_capabilities(model_name: str):
+    """Ask Ollama what a model actually supports (vision, tools, thinking...)."""
+    if model_name in _capability_cache:
+        return _capability_cache[model_name]
+    try:
+        response = requests.post(
+            f"{OLLAMA_BASE_URL}/api/show",
+            json={"model": model_name},
+            timeout=5,
+        )
+        response.raise_for_status()
+        capabilities = response.json().get("capabilities")
+    except requests.RequestException:
+        return None  # Ollama unreachable: do not cache, retry next time
+    _capability_cache[model_name] = capabilities
+    return capabilities
 
 
 def is_vision_model(model_name: str):
+    capabilities = get_model_capabilities(model_name)
+    if capabilities is not None:
+        return "vision" in capabilities
     lowered = model_name.lower()
-    return any(keyword in lowered for keyword in VISION_MODEL_KEYWORDS)
+    return any(keyword in lowered for keyword in _VISION_KEYWORD_FALLBACK)
 
 
 def likely_supports_tools(model_name: str):
+    capabilities = get_model_capabilities(model_name)
+    if capabilities is not None:
+        return "tools" in capabilities
     lowered = model_name.lower()
-    return any(keyword in lowered for keyword in TOOL_CAPABLE_KEYWORDS)
+    return any(keyword in lowered for keyword in _TOOLS_KEYWORD_FALLBACK)
 
 
 def fetch_installed_ollama_models(timeout=3):
@@ -102,7 +120,10 @@ def summarize_content(text: str, label: str, model: str):
     except requests.RequestException:
         pass
     words = len(text.split())
-    return f"I read {label} and saved it to this chat's memory ({words} words). Ask me anything about it."
+    return (
+        f"I saved {label} to this chat's memory ({words} words), but I could not reach the model "
+        "to summarize it — make sure Ollama is running, then ask me about it."
+    )
 
 
 def strip_thinking(text: str):

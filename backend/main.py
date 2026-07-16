@@ -25,7 +25,7 @@ from auth import (
 )
 from database import Base, SessionLocal, engine
 from models import Chat, DocumentChunk, ImageAttachment, Message, User
-from scraper import scrape_assignment_page
+from scraper import fetch_page
 
 load_dotenv()
 
@@ -60,15 +60,6 @@ OAUTH_PROVIDERS = {
         "userinfo_url": "https://openidconnect.googleapis.com/v1/userinfo",
         "scope": "openid email profile",
     },
-}
-
-MODEL_ALIASES = {
-    "llama3": "llama3:latest",
-    "llama3.1": "llama3.1:latest",
-    "llava": "llava:latest",
-    "qwen3": "qwen3:8b",
-    "qwen2.5vl": "qwen2.5vl:7b",
-    "llama3.2-vision": "llama3.2-vision:latest",
 }
 
 HISTORY_MESSAGE_LIMIT = 12
@@ -246,12 +237,12 @@ def get_owned_chat(chat_id: str, user: str, db: Session):
 
 
 def normalize_model_name(model_name: str | None):
-    selected = model_name or agent.DEFAULT_OLLAMA_MODEL
-    return MODEL_ALIASES.get(selected, selected)
+    return model_name or agent.DEFAULT_OLLAMA_MODEL
 
 
 def resolve_model(model_name: str | None, installed_model_names):
-    """Pick the requested model if installed, otherwise fall back sensibly."""
+    """Pick the requested model if installed, otherwise fall back sensibly
+    (prefix match handles short names like 'qwen3' for 'qwen3:8b')."""
     selected = normalize_model_name(model_name)
     if selected in installed_model_names:
         return selected
@@ -745,7 +736,7 @@ def scrape_page(
 ):
     get_owned_chat(chat_id, user, db)
     try:
-        page = scrape_assignment_page(
+        page = fetch_page(
             data.url,
             headless=data.headless,
             wait_seconds=max(0, min(data.wait_seconds, 20)),

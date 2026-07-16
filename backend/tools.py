@@ -23,7 +23,7 @@ from selenium.webdriver.common.by import By
 from sqlalchemy.orm import Session
 
 from models import DocumentChunk, ImageAttachment
-from scraper import create_driver, extract_mcq_questions, scrape_assignment_page
+from scraper import create_driver, extract_mcq_questions, fetch_page
 from vector_store import retrieve_relevant_chunks, split_text
 
 UPLOAD_DIR = Path(__file__).resolve().parent / "uploads"
@@ -236,10 +236,15 @@ def fetch_webpage(db: Session, chat_id: str, url: str):
     if not re.match(r"^https?://", url, re.I):
         url = f"https://{url}"
 
-    page = scrape_assignment_page(url, headless=True, wait_seconds=2)
+    page = fetch_page(url, headless=True, wait_seconds=2)
     chunk_count = save_document_text(db, chat_id, page.title, f"URL: {page.url}\n\n{page.text}")
 
     parts = [f"Page: {page.title} ({page.url})", f"Saved {chunk_count} chunks to chat memory.", "", clip(page.text)]
+    if len(page.text.split()) < 15:
+        parts.append(
+            "\nNote: the page returned almost no text. It may require login or heavy JavaScript — "
+            "consider open_browser so the user can log in, then read_browser_page."
+        )
     if page.pdf_links:
         parts.append("\nPDF links on the page (use read_pdf to open one):\n" + "\n".join(page.pdf_links[:10]))
     if page.links:
